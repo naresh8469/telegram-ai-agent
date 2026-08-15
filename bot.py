@@ -11,48 +11,47 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
-CLAUDE_MODEL = "claude-sonnet-4-6"
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_API_URL = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+)
 
 # In-memory conversation history per chat (resets if the service restarts)
 conversation_history = {}
 
 
-def ask_claude(chat_id: int, user_message: str) -> str:
-    """Send the user's message (with recent history) to Claude and return the reply text."""
+def ask_gemini(chat_id: int, user_message: str) -> str:
+    """Send the user's message (with recent history) to Gemini and return the reply text."""
     history = conversation_history.get(chat_id, [])
-    history.append({"role": "user", "content": user_message})
+    history.append({"role": "user", "parts": [{"text": user_message}]})
 
     # Keep only the last 10 messages to control context size
     history = history[-10:]
 
-    headers = {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": CLAUDE_MODEL,
-        "max_tokens": 1000,
-        "messages": history,
-    }
+    headers = {"content-type": "application/json"}
+    params = {"key": GEMINI_API_KEY}
+    payload = {"contents": history}
 
     try:
-        response = requests.post(CLAUDE_API_URL, headers=headers, json=payload, timeout=30)
+        response = requests.post(
+            GEMINI_API_URL, headers=headers, params=params, json=payload, timeout=30
+        )
         response.raise_for_status()
         data = response.json()
-        reply_text = "".join(
-            block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"
-        )
+        candidates = data.get("candidates", [])
+        reply_text = ""
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            reply_text = "".join(part.get("text", "") for part in parts)
         if not reply_text:
             reply_text = "Maaf kijiye, jawab generate nahi ho paaya."
     except Exception as e:
-        logger.error(f"Claude API error: {e}")
+        logger.error(f"Gemini API error: {e}")
         reply_text = "Kuch technical dikkat aa gayi, thodi der baad phir try kijiye."
 
-    history.append({"role": "assistant", "content": reply_text})
+    history.append({"role": "model", "parts": [{"text": reply_text}]})
     conversation_history[chat_id] = history
 
     return reply_text
@@ -76,15 +75,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
-    reply_text = ask_claude(chat_id, user_message)
+    reply_text = ask_gemini(chat_id, user_message)
     await update.message.reply_text(reply_text)
 
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable set nahi hai.")
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY environment variable set nahi hai.")
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY environment variable set nahi hai.")
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
