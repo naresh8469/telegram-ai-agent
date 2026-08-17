@@ -10,19 +10,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable set nahi hai.")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY environment variable set nahi hai.")
+if not GROQ_API_KEY:
+    raise RuntimeError("GROQ_API_KEY environment variable set nahi hai.")
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_API_URL = (
-    f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-)
+GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 app = Flask(__name__)
 
@@ -30,36 +28,35 @@ app = Flask(__name__)
 conversation_history = {}
 
 
-def ask_gemini(chat_id: int, user_message: str) -> str:
-    """Send the user's message (with recent history) to Gemini and return the reply text."""
+def ask_groq(chat_id: int, user_message: str) -> str:
+    """Send the user's message (with recent history) to Groq and return the reply text."""
     history = conversation_history.get(chat_id, [])
-    history.append({"role": "user", "parts": [{"text": user_message}]})
+    history.append({"role": "user", "content": user_message})
 
     # Keep only the last 10 messages to control context size
     history = history[-10:]
 
-    headers = {"content-type": "application/json"}
-    params = {"key": GEMINI_API_KEY}
-    payload = {"contents": history}
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "content-type": "application/json",
+    }
+    payload = {"model": GROQ_MODEL, "messages": history}
 
     try:
-        response = requests.post(
-            GEMINI_API_URL, headers=headers, params=params, json=payload, timeout=30
-        )
+        response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
         data = response.json()
-        candidates = data.get("candidates", [])
+        choices = data.get("choices", [])
         reply_text = ""
-        if candidates:
-            parts = candidates[0].get("content", {}).get("parts", [])
-            reply_text = "".join(part.get("text", "") for part in parts)
+        if choices:
+            reply_text = choices[0].get("message", {}).get("content", "")
         if not reply_text:
             reply_text = "Maaf kijiye, jawab generate nahi ho paaya."
     except Exception as e:
-        logger.error(f"Gemini API error: {e}")
+        logger.error(f"Groq API error: {e}")
         reply_text = "Kuch technical dikkat aa gayi, thodi der baad phir try kijiye."
 
-    history.append({"role": "model", "parts": [{"text": reply_text}]})
+    history.append({"role": "assistant", "content": reply_text})
     conversation_history[chat_id] = history
 
     return reply_text
@@ -103,7 +100,7 @@ def webhook():
         conversation_history.pop(chat_id, None)
         send_telegram_message(chat_id, "Conversation reset ho gayi hai.")
     elif text:
-        reply_text = ask_gemini(chat_id, text)
+        reply_text = ask_groq(chat_id, text)
         send_telegram_message(chat_id, reply_text)
 
     return "ok", 200
@@ -112,4 +109,4 @@ def webhook():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-   
+    
